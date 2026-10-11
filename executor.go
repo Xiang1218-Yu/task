@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -84,6 +85,9 @@ type (
 		executionHashes      map[string]*executionState
 		executionHashesMutex sync.Mutex
 		watchedDirs          *xsync.Map[string, bool]
+		// signalReceived is set once an interrupt/terminate signal has been
+		// received, so runs in progress are not treated as successful.
+		signalReceived atomic.Bool
 	}
 	TempDir struct {
 		Remote      string
@@ -133,6 +137,19 @@ func (e *Executor) fingerprinter() *fingerprint.Fingerprinter {
 		e.Dry,
 		e.Logger,
 	)
+}
+
+// outputsTracker is built on the fly rather than once in Setup because fields
+// like Dry may be mutated between runs.
+func (e *Executor) outputsTracker() *fingerprint.OutputsTracker {
+	return fingerprint.NewOutputsTracker(e.TempDir.Fingerprint, e.Dry, e.Logger)
+}
+
+// Interrupted reports whether the executor received an interrupt or
+// termination signal. Such a run must not be treated as successful, even if a
+// shell command returned without an error.
+func (e *Executor) Interrupted() bool {
+	return e.signalReceived.Load()
 }
 
 // WithDir sets the working directory of the [Executor]. By default, the

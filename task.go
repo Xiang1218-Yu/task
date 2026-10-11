@@ -15,6 +15,7 @@ import (
 	"github.com/go-task/task/v3/errors"
 	"github.com/go-task/task/v3/internal/env"
 	"github.com/go-task/task/v3/internal/execext"
+	"github.com/go-task/task/v3/internal/fingerprint"
 	"github.com/go-task/task/v3/internal/logger"
 	"github.com/go-task/task/v3/internal/output"
 	"github.com/go-task/task/v3/internal/slicesext"
@@ -253,6 +254,23 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 			e.Logger.Errf(logger.Red, "task: cannot make directory %q: %v\n", t.Dir, err)
 		}
 
+		// For tasks that opt in to dynamic output tracking (clean: true),
+		// snapshot the files currently matching "generates" before running. A
+		// matching snapshot taken after a successful run drives stale-output
+		// cleanup (see OutputsTracker.Commit).
+		outputsTracker := e.outputsTracker()
+		var outputsRun *fingerprint.OutputsRun
+		if outputsTracker.Enabled(t) {
+			run, err := outputsTracker.Begin(t)
+			if err != nil {
+				// Snapshotting must never break a build: disable tracking for
+				// this run and leave existing files untouched.
+				e.Logger.VerboseErrf(logger.Yellow, "task: unable to track outputs of %q, skipping cleanup for this run: %v\n", call.Task, err)
+			} else {
+				outputsRun = run
+			}
+		}
+
 		var deferredExitCode uint8
 
 		for i := range t.Cmds {
@@ -279,6 +297,20 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 					deferredExitCode = errors.TimeoutExitCode
 				}
 
+				// The run failed or was interrupted: do not prune files and do
+				// not record a new output manifest, so existing outputs are
+				// preserved.
+				return err
+			}
+		}
+
+		// Every command succeeded: prune outputs no longer produced and record
+		// the new result set. This is the only place files are removed, and it
+		// is driven solely by the task's own previous manifest. A run that was
+		// interrupted (or whose context expired) is not trusted as successful:
+		// no files are removed and the previous manifest is preserved.
+		if outputsRun != nil && ctx.Err() == nil && !e.Interrupted() {
+			if err := outputsTracker.Commit(t, outputsRun); err != nil {
 				return err
 			}
 		}

@@ -3,6 +3,7 @@ package task_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -497,6 +498,147 @@ func TestGenerates(t *testing.T) {
 		}
 		buff.Reset()
 	}
+}
+
+// TestDynamicOutputs covers the "clean: true" opt-in: a task remembers the
+// files it actually produced on each successful run, removes stale files
+// registered by a previous run, and its up-to-date checks follow the latest
+// successful result. Failed runs and tasks without the opt-in never delete
+// anything.
+func TestDynamicOutputs(t *testing.T) { // nolint:paralleltest // mutates process env vars
+	const dir = "testdata/dynamic_outputs"
+	absDir, err := filepath.Abs(dir)
+	require.NoError(t, err)
+
+	// Start from a clean state.
+	for _, p := range []string{"out", "checked", "legacy", "fail", ".task", "source.txt"} {
+		require.NoError(t, os.RemoveAll(filepathext.SmartJoin(dir, p)))
+	}
+
+	newExecutor := func() (*task.Executor, *bytes.Buffer) {
+		t.Helper()
+		var buff bytes.Buffer
+		tempDir := task.TempDir{
+			Remote:      filepathext.SmartJoin(dir, ".task"),
+			Fingerprint: filepathext.SmartJoin(dir, ".task"),
+		}
+		e := task.NewExecutor(
+			task.WithDir(dir),
+			task.WithStdout(&buff),
+			task.WithStderr(&buff),
+			task.WithTempDir(tempDir),
+		)
+		require.NoError(t, e.Setup())
+		return e, &buff
+	}
+
+	manifestFiles := func(name string) []string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, ".task/outputs", name))
+		require.NoError(t, err)
+		var m struct {
+			Files []string
+		}
+		require.NoError(t, json.Unmarshal(data, &m))
+		return m.Files
+	}
+
+	// Run 1: the task produces a.txt and b.txt; both are registered.
+	t.Setenv("OUTPUTS", "a.txt b.txt")
+	e, _ := newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "build"}))
+	for _, f := range []string{"out/a.txt", "out/b.txt"} {
+		_, err := os.Stat(filepathext.SmartJoin(dir, f))
+		require.NoError(t, err, "%s should exist", f)
+	}
+	require.FileExists(t, filepathext.SmartJoin(dir, ".task/outputs/build"))
+
+	// Run 2: the result set changes to a.txt and c.txt. b.txt lingers on disk
+	// but is no longer produced, so Task removes it as a stale registered
+	// output.
+	t.Setenv("OUTPUTS", "a.txt c.txt")
+	e, _ = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "build"}))
+	require.FileExists(t, filepathext.SmartJoin(dir, "out/a.txt"))
+	require.FileExists(t, filepathext.SmartJoin(dir, "out/c.txt"))
+	_, err = os.Stat(filepathext.SmartJoin(dir, "out/b.txt"))
+	require.Error(t, err, "stale out/b.txt should have been removed")
+
+	files := manifestFiles("build")
+	assert.Contains(t, files, filepath.ToSlash(filepath.Join(absDir, "out/a.txt")))
+	assert.Contains(t, files, filepath.ToSlash(filepath.Join(absDir, "out/c.txt")))
+	assert.NotContains(t, files, filepath.ToSlash(filepath.Join(absDir, "out/b.txt")))
+
+	// Without the opt-in, legacy sources/generates behavior is preserved:
+	// stale files are kept and no manifest is written.
+	t.Setenv("OUTPUTS", "a.txt b.txt")
+	e, _ = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "legacy"}))
+	t.Setenv("OUTPUTS", "a.txt c.txt")
+	e, _ = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "legacy"}))
+	require.FileExists(t, filepathext.SmartJoin(dir, "legacy/b.txt"), "stale file must survive without clean: true")
+	_, err = os.Stat(filepathext.SmartJoin(dir, ".task/outputs/legacy"))
+	require.True(t, os.IsNotExist(err), "no manifest must be written without clean: true")
+
+	// A failing run deletes nothing and writes no manifest - including a
+	// pre-existing user file that merely matches the generates patterns.
+	keepFile := filepathext.SmartJoin(dir, "fail/keep.txt")
+	require.NoError(t, os.MkdirAll(filepathext.SmartJoin(dir, "fail"), 0o755))
+	require.NoError(t, os.WriteFile(keepFile, []byte("mine"), 0o644))
+	t.Setenv("MODE", "fail")
+	e, _ = newExecutor()
+	require.Error(t, e.Run(t.Context(), &task.Call{Task: "flaky"}))
+	require.FileExists(t, filepathext.SmartJoin(dir, "fail/partial.txt"), "outputs of a failed run must be left untouched")
+	require.FileExists(t, keepFile, "unregistered pre-existing files must be left untouched")
+	_, err = os.Stat(filepathext.SmartJoin(dir, ".task/outputs/flaky"))
+	require.True(t, os.IsNotExist(err), "failed runs must not record an output manifest")
+
+	// Once the task succeeds, its actual output is registered while the
+	// unregistered pre-existing file is still protected.
+	t.Setenv("MODE", "ok")
+	e, _ = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "flaky"}))
+	require.FileExists(t, keepFile)
+	require.FileExists(t, filepathext.SmartJoin(dir, "fail/partial.txt"))
+	assert.ElementsMatch(t,
+		[]string{filepath.ToSlash(filepath.Join(absDir, "fail/partial.txt"))},
+		manifestFiles("flaky"),
+	)
+
+	// Up-to-date checks stay consistent with the latest successful result.
+	sourceFile := filepathext.SmartJoin(dir, "source.txt")
+	t.Setenv("OUTPUTS", "x.txt y.txt")
+	require.NoError(t, os.WriteFile(sourceFile, []byte("v1"), 0o644))
+	e, _ = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "build-source"}))
+
+	var buff *bytes.Buffer
+	e, buff = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "build-source"}))
+	assert.Equal(t, `task: Task "build-source" is up to date`+"\n", buff.String())
+
+	// Removing a file recorded by the last successful run forces a re-run.
+	require.NoError(t, os.Remove(filepathext.SmartJoin(dir, "checked/x.txt")))
+	e, buff = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "build-source"}))
+	assert.NotContains(t, buff.String(), "is up to date", "missing recorded output must invalidate up-to-date")
+	require.FileExists(t, filepathext.SmartJoin(dir, "checked/x.txt"))
+
+	// A source change with a different result set prunes stale outputs...
+	require.NoError(t, os.WriteFile(sourceFile, []byte("v2"), 0o644))
+	t.Setenv("OUTPUTS", "x.txt z.txt")
+	e, _ = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "build-source"}))
+	require.FileExists(t, filepathext.SmartJoin(dir, "checked/x.txt"))
+	require.FileExists(t, filepathext.SmartJoin(dir, "checked/z.txt"))
+	_, err = os.Stat(filepathext.SmartJoin(dir, "checked/y.txt"))
+	require.Error(t, err, "stale checked/y.txt should have been removed")
+
+	// ...and the new result set is immediately up to date.
+	e, buff = newExecutor()
+	require.NoError(t, e.Run(t.Context(), &task.Call{Task: "build-source"}))
+	assert.Equal(t, `task: Task "build-source" is up to date`+"\n", buff.String())
 }
 
 func TestStatusChecksum(t *testing.T) { // nolint:paralleltest // cannot run in parallel

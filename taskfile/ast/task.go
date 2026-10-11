@@ -13,17 +13,23 @@ import (
 
 // Task represents a task
 type Task struct {
-	Task          string `hash:"ignore"`
-	Cmds          []*Cmd
-	Deps          []*Dep
-	Label         string
-	Desc          string
-	Prompt        Prompt
-	Summary       string
-	Requires      *Requires
-	Aliases       []string
-	Sources       []*Glob
-	Generates     []*Glob
+	Task      string `hash:"ignore"`
+	Cmds      []*Cmd
+	Deps      []*Dep
+	Label     string
+	Desc      string
+	Prompt    Prompt
+	Summary   string
+	Requires  *Requires
+	Aliases   []string
+	Sources   []*Glob
+	Generates []*Glob
+	// Clean enables tracking of the files the task actually produces on each
+	// successful run. Files recorded by a previous successful run but no longer
+	// produced are removed, and up-to-date checks require every recorded output
+	// to exist. It has no effect without "generates", which scopes the files
+	// that may be tracked and removed.
+	Clean         bool
 	Status        []string
 	Preconditions []*Precondition
 	Dir           string
@@ -143,6 +149,7 @@ func (t *Task) UnmarshalYAML(node *yaml.Node) error {
 			Aliases       []string
 			Sources       []*Glob
 			Generates     []*Glob
+			Clean         bool
 			Status        []string
 			Preconditions []*Precondition
 			Dir           string
@@ -184,6 +191,7 @@ func (t *Task) UnmarshalYAML(node *yaml.Node) error {
 		t.Aliases = task.Aliases
 		t.Sources = task.Sources
 		t.Generates = task.Generates
+		t.Clean = task.Clean
 		t.Status = task.Status
 		t.Preconditions = task.Preconditions
 		t.Dir = task.Dir
@@ -228,6 +236,7 @@ func (t *Task) DeepCopy() *Task {
 		Aliases:              deepcopy.Slice(t.Aliases),
 		Sources:              deepcopy.Slice(t.Sources),
 		Generates:            deepcopy.Slice(t.Generates),
+		Clean:                t.Clean,
 		Status:               deepcopy.Slice(t.Status),
 		Preconditions:        deepcopy.Slice(t.Preconditions),
 		Dir:                  t.Dir,

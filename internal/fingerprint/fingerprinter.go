@@ -118,6 +118,13 @@ func (f *Fingerprinter) UpToDate(ctx context.Context, t *ast.Task) (bool, error)
 		}
 	}
 
+	// With dynamic output tracking (clean: true), the result also has to
+	// match the latest successful run: every file recorded by it must exist.
+	// A missing output or a damaged record forces the task to run again.
+	if checked, ok := recordedOutputsExist(f.tempDir, t); checked && !ok {
+		return false, nil
+	}
+
 	if statusIsSet && sourcesIsSet {
 		return statusUpToDate && sourcesUpToDate, nil
 	}

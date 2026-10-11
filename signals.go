@@ -26,6 +26,7 @@ func (e *Executor) InterceptInterruptSignals() {
 				os.Exit(1)
 			}
 
+			e.signalReceived.Store(true)
 			e.Logger.Outf(logger.Yellow, "task: Signal received: %q\n", sig)
 		}
 	}()

@@ -1,0 +1,62 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Regenerates a dynamic set of output files listed in OUTPUTS and prunes stale ones
+    clean: true
+    generates:
+      - out/*.txt
+    vars:
+      OUTPUTS:
+        sh: echo "${OUTPUTS:-a.txt b.txt}"
+    cmds:
+      - mkdir -p out
+      - |
+        for f in {{.OUTPUTS}}; do
+          printf 'content of %s\n' "$f" > "out/$f"
+        done
+
+  build-source:
+    desc: Like build, but fingerprinted by source.txt
+    clean: true
+    method: checksum
+    sources:
+      - source.txt
+    generates:
+      - checked/*.txt
+    vars:
+      OUTPUTS:
+        sh: echo "${OUTPUTS:-x.txt y.txt}"
+    cmds:
+      - mkdir -p checked
+      - |
+        for f in {{.OUTPUTS}}; do
+          printf 'content of %s\n' "$f" > "checked/$f"
+        done
+
+  legacy:
+    desc: Dynamic generation without clean - stale files are left untouched
+    generates:
+      - legacy/*.txt
+    vars:
+      OUTPUTS:
+        sh: echo "${OUTPUTS:-a.txt b.txt}"
+    cmds:
+      - mkdir -p legacy
+      - |
+        for f in {{.OUTPUTS}}; do
+          printf 'content of %s\n' "$f" > "legacy/$f"
+        done
+
+  flaky:
+    desc: Fails unless MODE=ok, after creating an output
+    clean: true
+    generates:
+      - fail/*.txt
+    vars:
+      MODE:
+        sh: echo "${MODE:-fail}"
+    cmds:
+      - mkdir -p fail
+      - printf 'partial\n' > fail/partial.txt
+      - cmd: test "{{.MODE}}" = ok
