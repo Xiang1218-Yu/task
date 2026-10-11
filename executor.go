@@ -12,6 +12,7 @@ import (
 	"github.com/go-task/task/v3/internal/fingerprint"
 	"github.com/go-task/task/v3/internal/logger"
 	"github.com/go-task/task/v3/internal/output"
+	"github.com/go-task/task/v3/internal/session"
 	"github.com/go-task/task/v3/internal/sort"
 	"github.com/go-task/task/v3/taskfile"
 	"github.com/go-task/task/v3/taskfile/ast"
@@ -76,6 +77,13 @@ type (
 
 		fuzzyModel     *fuzzy.Model
 		fuzzyModelOnce sync.Once
+
+		// sessionCfg is provided by the user to opt into resumable
+		// execution. session is the active session manager, created during
+		// Run after the Taskfile has been loaded. Both are nil in ordinary
+		// runs, in which case Task behaves exactly as it used to.
+		sessionCfg *SessionConfig
+		session    *session.Manager
 
 		promptedVars         *ast.Vars // vars collected via interactive prompts
 		concurrencySemaphore chan struct{}

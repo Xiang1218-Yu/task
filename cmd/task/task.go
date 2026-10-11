@@ -133,9 +133,19 @@ func run() error {
 		return nil
 	}
 
+	var sessionCfg *task.SessionConfig
+	if flags.Session != "" {
+		sessionCfg = &task.SessionConfig{
+			ID:      flags.Session,
+			Clean:   flags.SessionClean,
+			Archive: flags.SessionArchive,
+		}
+	}
+
 	e := task.NewExecutor(
 		flags.WithFlags(),
 		task.WithVersionCheck(true),
+		task.WithSessionConfig(sessionCfg),
 	)
 	if err := e.Setup(); err != nil {
 		return err
@@ -144,6 +154,16 @@ func run() error {
 	if flags.ClearCache {
 		cachePath := filepath.Join(e.TempDir.Remote, "remote")
 		return os.RemoveAll(cachePath)
+	}
+
+	if flags.SessionRm != "" {
+		if err := e.RemoveSession(flags.SessionRm); err != nil {
+			return err
+		}
+		if !flags.Silent {
+			log.Outf(logger.Green, "task: session %q removed\n", flags.SessionRm)
+		}
+		return nil
 	}
 
 	listOptions := task.NewListOptions(
@@ -187,6 +207,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// Capture the invocation inputs of a resumable session before any run
+	// starts: on resume they are compared against the stored ones.
+	if sessionCfg != nil {
+		sessionCfg.Globals = make(map[string]string, globals.Len())
+		for k, v := range globals.All() {
+			sessionCfg.Globals[k] = fmt.Sprint(v.Value)
+		}
+		sessionCfg.CLIArgs = cliArgsPostDashQuoted
+	}
 	specialVars := ast.NewVars()
 	specialVars.Set("CLI_ARGS", ast.Var{Value: cliArgsPostDashQuoted})
 	specialVars.Set("CLI_ARGS_LIST", ast.Var{Value: cliArgsPostDash})
@@ -196,11 +226,17 @@ func run() error {
 	specialVars.Set("CLI_OFFLINE", ast.Var{Value: flags.Offline})
 	specialVars.Set("CLI_ASSUME_YES", ast.Var{Value: flags.AssumeYes})
 	e.Taskfile.Vars.ReverseMerge(specialVars, nil)
-	if !flags.Watch {
+	ctx := context.Background()
+	if sessionCfg != nil {
+		// In a resumable session an interrupt cancels the run so the session
+		// state is finalized before the process exits; a later invocation
+		// resumes the interrupted node.
+		var stop func()
+		ctx, stop = e.InterceptInterruptSignalsWithContext(ctx)
+		defer stop()
+	} else if !flags.Watch {
 		e.InterceptInterruptSignals()
 	}
-
-	ctx := context.Background()
 
 	if flags.Status {
 		return e.Status(ctx, calls...)

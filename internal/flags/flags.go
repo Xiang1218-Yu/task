@@ -91,6 +91,10 @@ var (
 	CertKey             string
 	Interactive         bool
 	TempDir             string
+	Session             string
+	SessionClean        bool
+	SessionArchive      bool
+	SessionRm           string
 )
 
 func init() {
@@ -153,6 +157,10 @@ func init() {
 	pflag.StringVarP(&Dir, "dir", "d", "", "Sets the directory in which Task will execute and look for a Taskfile.")
 	pflag.StringVarP(&Entrypoint, "taskfile", "t", "", `Choose which Taskfile to run. Defaults to "Taskfile.yml".`)
 	pflag.StringVar(&TempDir, "temp-dir", getConfig(config, "TEMP_DIR", func() *string { return config.TempDir }, ""), "Sets the directory used to store Task temporary files, such as checksums. Relative paths are relative to the root Taskfile.")
+	pflag.StringVar(&Session, "session", "", "Starts or resumes a resumable execution session with the given unique identifier.")
+	pflag.BoolVar(&SessionClean, "session-clean", false, "Delete the session state when the run started with --session completes successfully.")
+	pflag.BoolVar(&SessionArchive, "session-archive", false, "Archive the session state when the run started with --session completes successfully.")
+	pflag.StringVar(&SessionRm, "session-rm", "", "Removes the stored session with the given identifier and exits, including any archived copy.")
 	pflag.StringVarP(&Output.Name, "output", "o", getConfig(config, "OUTPUT", func() *string { return nil }, ""), "Sets output style: [interleaved|group|prefixed].")
 	pflag.StringVar(&Output.Group.Begin, "output-group-begin", getConfig(config, "OUTPUT_GROUP_BEGIN", func() *string { return nil }, ""), "Message template to print before a task's grouped output.")
 	pflag.StringVar(&Output.Group.End, "output-group-end", getConfig(config, "OUTPUT_GROUP_END", func() *string { return nil }, ""), "Message template to print after a task's grouped output.")
@@ -264,6 +272,29 @@ func Validate() error {
 	// Validate certificate flags
 	if (Cert != "" && CertKey == "") || (Cert == "" && CertKey != "") {
 		return errors.New("task: --cert and --cert-key must be provided together")
+	}
+
+	// Validate session flags
+	if SessionClean && SessionArchive {
+		return errors.New("task: --session-clean and --session-archive cannot be used together")
+	}
+	if (SessionClean || SessionArchive) && Session == "" {
+		return errors.New("task: --session-clean and --session-archive require --session")
+	}
+	if Session != "" && SessionRm != "" {
+		return errors.New("task: --session and --session-rm cannot be used together")
+	}
+	if Session != "" {
+		switch {
+		case Watch:
+			return errors.New("task: --session cannot be combined with --watch")
+		case Dry:
+			return errors.New("task: --session cannot be combined with --dry")
+		case Status:
+			return errors.New("task: --session cannot be combined with --status")
+		case Summary:
+			return errors.New("task: --session cannot be combined with --summary")
+		}
 	}
 
 	return nil

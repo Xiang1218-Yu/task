@@ -17,6 +17,7 @@ import (
 	"github.com/go-task/task/v3/internal/execext"
 	"github.com/go-task/task/v3/internal/logger"
 	"github.com/go-task/task/v3/internal/output"
+	"github.com/go-task/task/v3/internal/session"
 	"github.com/go-task/task/v3/internal/slicesext"
 	"github.com/go-task/task/v3/internal/sort"
 	"github.com/go-task/task/v3/internal/summary"
@@ -83,6 +84,43 @@ func (e *Executor) Run(ctx context.Context, calls ...*Call) error {
 		return err
 	}
 
+	sessionEnabled := e.sessionCfg != nil && e.sessionCfg.ID != ""
+	if sessionEnabled {
+		switch {
+		case e.Dry:
+			return errors.New("task: --session cannot be combined with --dry")
+		case e.Watch || len(watchCalls) > 0:
+			return errors.New("task: --session cannot be combined with --watch")
+		}
+		if err := e.beginSession(regularCalls); err != nil {
+			return err
+		}
+	}
+
+	runErr := e.runRegularCalls(ctx, regularCalls)
+
+	if sessionEnabled {
+		// Finalize even when a run failed: the session must record failed or
+		// interrupted nodes so a later invocation can resume from them.
+		if finishErr := e.finishSession(runErr); runErr == nil && finishErr != nil {
+			runErr = finishErr
+		}
+	}
+
+	if runErr != nil {
+		return runErr
+	}
+
+	if len(watchCalls) > 0 {
+		return e.watchTasks(watchCalls...)
+	}
+
+	return nil
+}
+
+// runRegularCalls executes the non-watch calls, honoring the parallel and
+// failfast options.
+func (e *Executor) runRegularCalls(ctx context.Context, regularCalls []*Call) error {
 	g := &errgroup.Group{}
 	if e.Failfast {
 		g, ctx = errgroup.WithContext(ctx)
@@ -96,15 +134,7 @@ func (e *Executor) Run(ctx context.Context, calls ...*Call) error {
 			}
 		}
 	}
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	if len(watchCalls) > 0 {
-		return e.watchTasks(watchCalls...)
-	}
-
-	return nil
+	return g.Wait()
 }
 
 func (e *Executor) splitRegularAndWatchCalls(calls ...*Call) (regularCalls []*Call, watchCalls []*Call, err error) {
@@ -203,13 +233,84 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 	release := e.acquireConcurrencyLimit()
 	defer release()
 
-	if err = e.startExecution(ctx, t, func(ctx context.Context) error {
+	if err = e.startExecution(ctx, t, func(ctx context.Context) (bodyErr error) {
 		e.Logger.VerboseErrf(logger.Magenta, "task: %q started\n", call.Task)
+
+		sess := e.session
+		var (
+			nodeKey       string
+			nodeDefHash   string
+			nodeInputHash string
+			nodeReused    bool
+			nodeSkipped   bool
+		)
+		if sess != nil {
+			nodeKey, nodeDefHash, err = e.sessionNodeIdentity(t, call)
+			if err != nil {
+				return err
+			}
+			if err = sess.MarkRunning(
+				nodeKey,
+				session.NodeInfo{Name: t.Name(), Task: t.Task},
+				sessionParentFromContext(ctx),
+			); err != nil {
+				return err
+			}
+			ctx = context.WithValue(ctx, sessionParentKey{}, nodeKey)
+
+			// Record the final node state whatever path the run takes. A
+			// node is only ever marked as succeeded after its commands return
+			// nil: interrupted or crashed processes leave the persisted node
+			// in the "running" state and it will be re-executed on resume.
+			defer func() {
+				switch {
+				case bodyErr != nil:
+					_ = sess.MarkFailed(nodeKey, bodyErr)
+				case nodeReused || nodeSkipped:
+					// Already recorded by the corresponding path.
+				default:
+					_ = sess.MarkSucceeded(nodeKey, nodeDefHash, nodeInputHash)
+				}
+			}()
+		}
+
 		if err := e.runDeps(ctx, t); err != nil {
 			return err
 		}
 
 		skipFingerprinting := e.ForceAll || (!call.Indirect && e.Force)
+
+		// Session-level reuse: the node succeeded in a compatible session,
+		// its definition and dependency inputs still match and none of its
+		// dependencies had to run again. This is independent of the
+		// sources/generates/checksum fingerprint machinery.
+		if sess != nil {
+			var reuse bool
+			reuse, nodeInputHash = sess.ReuseDecision(nodeKey, nodeDefHash)
+			if reuse && !skipFingerprinting {
+				if err := sess.MarkReused(nodeKey); err != nil {
+					return err
+				}
+				nodeReused = true
+				if e.Verbose || (!call.Silent && !t.IsSilent() && !e.Taskfile.Silent && !e.Silent) {
+					name := t.Name()
+					if e.OutputStyle.Name == "prefixed" {
+						name = t.Prefix
+					}
+					e.Logger.Errf(
+						logger.Magenta,
+						"task: Session %q: Task %q already completed - reusing result\n",
+						sess.ID(), name,
+					)
+				}
+				e.Logger.VerboseErrf(
+					logger.Magenta,
+					"task: %q finished (reused from session %q)\n", call.Task, sess.ID(),
+				)
+				return nil
+			}
+		}
+
 		if !skipFingerprinting {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -225,13 +326,19 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 				return err
 			}
 
-			if upToDate && preCondMet {
+			if upToDate && preCondMet && (sess == nil || !sess.DependencyReran(nodeKey)) {
 				if e.Verbose || (!call.Silent && !t.IsSilent() && !e.Taskfile.Silent && !e.Silent) {
 					name := t.Name()
 					if e.OutputStyle.Name == "prefixed" {
 						name = t.Prefix
 					}
 					e.Logger.Errf(logger.Magenta, "task: Task %q is up to date\n", name)
+				}
+				if sess != nil {
+					if err := sess.MarkSkipped(nodeKey); err != nil {
+						return err
+					}
+					nodeSkipped = true
 				}
 				return nil
 			}
