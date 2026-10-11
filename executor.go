@@ -12,6 +12,7 @@ import (
 	"github.com/go-task/task/v3/internal/fingerprint"
 	"github.com/go-task/task/v3/internal/logger"
 	"github.com/go-task/task/v3/internal/output"
+	"github.com/go-task/task/v3/internal/session"
 	"github.com/go-task/task/v3/internal/sort"
 	"github.com/go-task/task/v3/taskfile"
 	"github.com/go-task/task/v3/taskfile/ast"
@@ -58,6 +59,7 @@ type (
 		Concurrency         int
 		Interval            time.Duration
 		Failfast            bool
+		Resume              bool
 
 		// I/O
 		Stdin  io.Reader
@@ -83,6 +85,7 @@ type (
 		mkdirMutexMap        map[string]*sync.Mutex
 		executionHashes      map[string]*executionState
 		executionHashesMutex sync.Mutex
+		session              *session.Store
 		watchedDirs          *xsync.Map[string, bool]
 	}
 	TempDir struct {
@@ -662,4 +665,20 @@ type failfastOption struct {
 
 func (o *failfastOption) ApplyToExecutor(e *Executor) {
 	e.Failfast = o.failfast
+}
+
+// WithResume enables resumable execution: progress of completed dependencies
+// and commands is persisted after each success and reused by the next
+// invocation of the same tasks with matching Taskfile, input variables and
+// source files. When disabled, execution rules are unchanged.
+func WithResume(resume bool) *resumeOption {
+	return &resumeOption{resume}
+}
+
+type resumeOption struct {
+	resume bool
+}
+
+func (o *resumeOption) ApplyToExecutor(e *Executor) {
+	e.Resume = o.resume
 }

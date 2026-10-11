@@ -1,0 +1,24 @@
+version: '3'
+
+tasks:
+  default:
+    deps:
+      - dep-a
+      - dep-b
+    cmds:
+      - cmd: 'echo root1 >> "{{.ROOT_DIR}}/marks-root.txt"'
+      # This command produces a side effect and then fails while the
+      # "fail-root2" sentinel file exists, simulating a process killed halfway
+      # through the command: the side effect exists but the command never
+      # completed.
+      - cmd: 'echo root2 >> "{{.ROOT_DIR}}/marks-root.txt"; test ! -f "{{.ROOT_DIR}}/fail-root2"'
+      - cmd: 'echo root3 >> "{{.ROOT_DIR}}/marks-root.txt"'
+
+  dep-a:
+    cmds:
+      - 'echo a1 >> "{{.ROOT_DIR}}/marks-a.txt"'
+      - 'echo a2 >> "{{.ROOT_DIR}}/marks-a.txt"'
+
+  dep-b:
+    cmds:
+      - 'echo b1 >> "{{.ROOT_DIR}}/marks-b.txt"'

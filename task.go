@@ -17,6 +17,7 @@ import (
 	"github.com/go-task/task/v3/internal/execext"
 	"github.com/go-task/task/v3/internal/logger"
 	"github.com/go-task/task/v3/internal/output"
+	"github.com/go-task/task/v3/internal/session"
 	"github.com/go-task/task/v3/internal/slicesext"
 	"github.com/go-task/task/v3/internal/sort"
 	"github.com/go-task/task/v3/internal/summary"
@@ -83,6 +84,14 @@ func (e *Executor) Run(ctx context.Context, calls ...*Call) error {
 		return err
 	}
 
+	// Resume is an execution-recovery mechanism: it does not apply to dry runs
+	// (nothing executes) or watch mode.
+	if e.Resume && !e.Dry && len(watchCalls) == 0 {
+		if err := e.initSession(regularCalls...); err != nil {
+			return err
+		}
+	}
+
 	g := &errgroup.Group{}
 	if e.Failfast {
 		g, ctx = errgroup.WithContext(ctx)
@@ -97,8 +106,14 @@ func (e *Executor) Run(ctx context.Context, calls ...*Call) error {
 		}
 	}
 	if err := g.Wait(); err != nil {
+		// Keep the recovery state so the next invocation resumes: failed or
+		// interrupted work is never recorded as complete.
 		return err
 	}
+
+	// The whole invocation finished successfully; the recovery record has been
+	// consumed and later runs follow the normal execution rules again.
+	e.consumeSession()
 
 	if len(watchCalls) > 0 {
 		return e.watchTasks(watchCalls...)
@@ -203,8 +218,34 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 	release := e.acquireConcurrencyLimit()
 	defer release()
 
+	// Resume identity for this task invocation. nil unless resumable
+	// execution is enabled; all resume paths are no-ops then.
+	resumeFP, resumeOK := func() (*session.Fingerprint, bool) {
+		if e.session == nil || e.Dry || t.Watch {
+			return nil, false
+		}
+		return e.resumeFingerprint(call, t)
+	}()
+	skipResume := e.ForceAll || (!call.Indirect && e.Force)
+
 	if err = e.startExecution(ctx, t, func(ctx context.Context) error {
 		e.Logger.VerboseErrf(logger.Magenta, "task: %q started\n", call.Task)
+
+		// The whole task (dependencies and every command) completed in a
+		// previous run with matching Taskfile, input variables and source
+		// files: skip it entirely. This happens before dependencies, because a
+		// completed task implies its dependencies completed too.
+		if resumeOK && !skipResume && e.session.IsComplete(session.TaskKey(resumeFP)) {
+			if e.Verbose || (!call.Silent && !t.IsSilent() && !e.Taskfile.Silent && !e.Silent) {
+				name := t.Name()
+				if e.OutputStyle.Name == "prefixed" {
+					name = t.Prefix
+				}
+				e.Logger.Errf(logger.Magenta, "task: Task %q skipped: completed in a previous run\n", name)
+			}
+			return nil
+		}
+
 		if err := e.runDeps(ctx, t); err != nil {
 			return err
 		}
@@ -255,9 +296,25 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 
 		var deferredExitCode uint8
 
+		// Deferred commands run as the task exits and cannot be retried
+		// independently, so tasks owning one are only resumed as a whole.
+		cmdResume := resumeOK && !resumeFP.HasDefer
+
 		for i := range t.Cmds {
 			if t.Cmds[i].Defer {
 				defer e.runDeferred(t, call, i, t.Vars, &deferredExitCode)
+				continue
+			}
+
+			if cmdResume && !skipResume && e.session.IsComplete(session.CmdKey(resumeFP, i)) {
+				cmd := t.Cmds[i]
+				if e.Verbose || (!call.Silent && !cmd.Silent && !t.IsSilent() && !e.Taskfile.Silent && !e.Silent) {
+					label := cmd.LogCmd
+					if label == "" {
+						label = cmd.Task
+					}
+					e.Logger.Errf(logger.Magenta, "task: [%s] resumed; skipped: %s\n", t.Name(), label)
+				}
 				continue
 			}
 
@@ -268,6 +325,11 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 
 				if t.IgnoreError && isCommandFailure(err) {
 					e.Logger.VerboseErrf(logger.Yellow, "task: task error ignored: %v\n", err)
+					// An explicitly ignored failure counts as a finished step:
+					// skipping it on resume is the user-declared outcome.
+					if cmdResume && resumeCmdIsRecordable(t.Cmds[i]) {
+						e.markSessionComplete(session.CmdKey(resumeFP, i))
+					}
 					continue
 				}
 
@@ -279,13 +341,28 @@ func (e *Executor) RunTask(ctx context.Context, call *Call) error {
 					deferredExitCode = errors.TimeoutExitCode
 				}
 
+				// No record is written for a failed or interrupted command, so
+				// it runs again on the next invocation.
 				return err
+			}
+
+			// Record only after success: a process killed while the command is
+			// still running never reaches this point.
+			if cmdResume && resumeCmdIsRecordable(t.Cmds[i]) {
+				e.markSessionComplete(session.CmdKey(resumeFP, i))
 			}
 		}
 		e.Logger.VerboseErrf(logger.Magenta, "task: %q finished\n", call.Task)
 		return nil
 	}); err != nil {
 		return &errors.TaskRunError{TaskName: t.Name(), Err: err}
+	}
+
+	// The task and its dependencies finished successfully (this also covers
+	// deferred commands, which run inside startExecution). With force enabled
+	// the work was rebuilt and its fresh result is still safe to record.
+	if resumeOK {
+		e.markSessionComplete(session.TaskKey(resumeFP))
 	}
 
 	return nil

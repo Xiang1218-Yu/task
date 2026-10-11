@@ -76,6 +76,8 @@ var (
 	Color               bool
 	Interval            time.Duration
 	Failfast            bool
+	Resume              bool
+	ClearSession        bool
 	Global              bool
 	Experiments         bool
 	Download            bool
@@ -161,6 +163,9 @@ func init() {
 	pflag.IntVarP(&Concurrency, "concurrency", "C", getConfig(config, "CONCURRENCY", func() *int { return config.Concurrency }, 0), "Limit number of tasks to run concurrently.")
 	pflag.DurationVarP(&Interval, "interval", "I", 0, "Interval to watch for changes.")
 	pflag.BoolVarP(&Failfast, "failfast", "F", getConfig(config, "FAILFAST", func() *bool { return &config.Failfast }, false), "When running tasks in parallel, stop all tasks if one fails.")
+	resumeDefault, _ := env.GetTaskEnvBool("RESUME")
+	pflag.BoolVar(&Resume, "resume", resumeDefault, "Enables resumable execution: completed dependencies and commands are saved and skipped on the next invocation while the Taskfile, variables and sources match.")
+	pflag.BoolVar(&ClearSession, "clear-session", false, "Clears all saved resume progress and exits.")
 	pflag.BoolVarP(&Global, "global", "g", false, "Runs global Taskfile, from $HOME/{T,t}askfile.{yml,yaml}.")
 	pflag.BoolVar(&Experiments, "experiments", false, "Lists all the available experiments and whether or not they are enabled.")
 	pflag.BoolVar(&Download, "download", false, "Forces task to download remote Taskfiles and ignore any cached versions.")
@@ -331,6 +336,7 @@ func (o *flagsOption) ApplyToExecutor(e *task.Executor) {
 		task.WithTaskSorter(sorter),
 		task.WithVersionCheck(true),
 		task.WithFailfast(Failfast),
+		task.WithResume(Resume),
 		task.WithTempDirPath(TempDir),
 	)
 }

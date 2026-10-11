@@ -17,6 +17,7 @@ import (
 	"github.com/go-task/task/v3/internal/filepathext"
 	"github.com/go-task/task/v3/internal/flags"
 	"github.com/go-task/task/v3/internal/logger"
+	"github.com/go-task/task/v3/internal/session"
 	"github.com/go-task/task/v3/internal/version"
 	"github.com/go-task/task/v3/taskfile/ast"
 )
@@ -144,6 +145,10 @@ func run() error {
 	if flags.ClearCache {
 		cachePath := filepath.Join(e.TempDir.Remote, "remote")
 		return os.RemoveAll(cachePath)
+	}
+
+	if flags.ClearSession {
+		return session.Clear(e.TempDir.Fingerprint)
 	}
 
 	listOptions := task.NewListOptions(

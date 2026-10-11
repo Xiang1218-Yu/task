@@ -1,0 +1,13 @@
+version: '3'
+
+tasks:
+  default:
+    sources:
+      - input.txt
+    cmds:
+      # Copies the declared source. On resume this is skipped when the source
+      # contents still match, and re-run when they changed.
+      - cmd: 'cp "{{.TASK_DIR}}/input.txt" "{{.TASK_DIR}}/out.txt"'
+      # Fails while the "fail-after-copy" sentinel exists, interrupting the
+      # task after the first command succeeded.
+      - cmd: 'test ! -f "{{.TASK_DIR}}/fail-after-copy"'
