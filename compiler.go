@@ -27,6 +27,10 @@ type Compiler struct {
 	TaskfileEnv  *ast.Vars
 	TaskfileVars *ast.Vars
 
+	// ProfileName is the name of the execution profile selected from the
+	// command line, or empty when none was selected.
+	ProfileName string
+
 	Logger *logger.Logger
 
 	dynamicCache   map[string]string
@@ -224,6 +228,11 @@ func (c *Compiler) getSpecialVars(t *ast.Task, call *Call) (map[string]string, e
 		"TASK_VERSION":        version.GetVersion(),
 		"PATH_LIST_SEPARATOR": string(os.PathListSeparator),
 		"FILE_PATH_SEPARATOR": string(os.PathSeparator),
+	}
+	// Only expose PROFILE when a profile is selected, so that taskfiles run
+	// exactly as before when no profile is selected.
+	if c.ProfileName != "" {
+		allVars["PROFILE"] = c.ProfileName
 	}
 	if t != nil {
 		allVars["TASK"] = t.Task

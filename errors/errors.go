@@ -29,6 +29,13 @@ const (
 	CodeTaskfileDoesNotMatchChecksum
 )
 
+// Profile related exit codes
+const (
+	CodeProfileNotFound int = iota + 130
+	CodeProfileCycle
+	CodeProfileInvalid
+)
+
 // Task related exit codes
 const (
 	CodeTaskNotFound int = iota + 200

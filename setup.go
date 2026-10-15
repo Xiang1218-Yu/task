@@ -35,6 +35,9 @@ func (e *Executor) Setup() error {
 	if err := e.readTaskfile(node); err != nil {
 		return err
 	}
+	if err := e.setupProfile(); err != nil {
+		return err
+	}
 	e.setupStdFiles()
 	if err := e.setupOutput(); err != nil {
 		return err
@@ -220,17 +223,24 @@ func (e *Executor) setupCompiler() error {
 		UserWorkingDir: e.UserWorkingDir,
 		TaskfileEnv:    e.Taskfile.Env,
 		TaskfileVars:   e.Taskfile.Vars,
+		ProfileName:    e.Profile,
 		Logger:         e.Logger,
 	}
 	return nil
 }
 
 func (e *Executor) readDotEnvFiles() error {
-	if e.Taskfile == nil || len(e.Taskfile.Dotenv) == 0 {
+	if e.Taskfile == nil {
 		return nil
 	}
 
 	if e.Taskfile.Version.LessThan(ast.V3) {
+		return nil
+	}
+
+	// No dotenv files to read and no profile active: keep the Taskfile env
+	// exactly as it was declared.
+	if len(e.Taskfile.Dotenv) == 0 && e.activeProfile == nil {
 		return nil
 	}
 
@@ -239,17 +249,43 @@ func (e *Executor) readDotEnvFiles() error {
 		return err
 	}
 
-	env, err := taskfile.Dotenv(vars, e.Taskfile, e.Dir)
-	if err != nil {
-		return err
+	env := ast.NewVars()
+
+	// Taskfile-level dotenv files have the lowest precedence.
+	if len(e.Taskfile.Dotenv) > 0 {
+		dotenvVars, err := taskfile.Dotenv(vars, e.Taskfile, e.Dir)
+		if err != nil {
+			return err
+		}
+		env.Merge(dotenvVars, nil)
 	}
 
-	for k, v := range env.All() {
-		if _, ok := e.Taskfile.Env.Get(k); !ok {
-			e.Taskfile.Env.Set(k, v)
+	// Profile dotenv files override the Taskfile-level ones.
+	if e.activeProfile != nil && len(e.activeProfile.Dotenv) > 0 {
+		profileDotenv, err := taskfile.Dotenv(
+			vars,
+			&ast.Taskfile{Dotenv: e.activeProfile.Dotenv},
+			e.Dir,
+		)
+		if err != nil {
+			return err
 		}
+		env.Merge(profileDotenv, nil)
 	}
-	return err
+
+	// Explicitly declared env vars always win over dotenv files, and env
+	// vars from the selected profile win over the Taskfile-level ones.
+	env.Merge(e.Taskfile.Env, nil)
+	if e.activeProfile != nil {
+		env.Merge(e.activeProfile.Env, nil)
+	}
+
+	// Write the resolved values back into the Taskfile env map instead of
+	// replacing it: the compiler already holds a pointer to this map.
+	for key, value := range env.All() {
+		e.Taskfile.Env.Set(key, value)
+	}
+	return nil
 }
 
 func (e *Executor) setupDefaults() {

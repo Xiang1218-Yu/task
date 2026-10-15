@@ -29,6 +29,7 @@ func newTestFlagSet() *pflag.FlagSet {
 	fs.StringVar(&s, "sort", "", "Sort order")
 	fs.StringVar(&s, "cacert", "", "CA cert path")
 	fs.StringVar(&s, "completion", "", "Generate a completion script")
+	fs.StringVar(&s, "profile", "", "Execution profile")
 	return fs
 }
 
@@ -233,6 +234,35 @@ func TestComplete_FlagValueInlineEquals(t *testing.T) {
 	require.Equal(t, complete.DirectiveNoFileComp, dir)
 }
 
+func TestComplete_ProfileValues(t *testing.T) {
+	t.Parallel()
+
+	const taskfileWithProfiles = `version: '3'
+
+profiles:
+  dev:
+    desc: Development
+  prod:
+    desc: Production
+
+tasks:
+  default:
+    cmds:
+      - 'echo hi'
+`
+	e := setupExecutorWith(t, taskfileWithProfiles)
+
+	suggs, dir := complete.Complete(e, newTestFlagSet(), []string{"--profile", ""}, complete.Options{})
+	require.Equal(t, []string{"dev", "prod"}, values(suggs))
+	require.Equal(t, complete.DirectiveNoFileComp, dir)
+	require.Contains(t, descriptions(suggs), "Development")
+
+	suggs, dir = complete.Complete(e, newTestFlagSet(), []string{"--profile=pr"}, complete.Options{})
+	// The engine returns full tokens; the shell filters by the typed prefix.
+	require.Equal(t, []string{"--profile=dev", "--profile=prod"}, values(suggs))
+	require.Equal(t, complete.DirectiveNoFileComp, dir)
+}
+
 func TestComplete_AfterDash(t *testing.T) {
 	t.Parallel()
 
@@ -391,6 +421,8 @@ func TestNeedsTaskfile(t *testing.T) {
 		"inline flag value":    {[]string{"--output="}, false},
 		"flag value":           {[]string{"--output", ""}, false},
 		"path flag value":      {[]string{"--taskfile", ""}, false},
+		"profile flag value":   {[]string{"--profile", ""}, true},
+		"inline profile value": {[]string{"--profile=d"}, true},
 		"after dash":           {[]string{"deploy", "--", ""}, false},
 	}
 

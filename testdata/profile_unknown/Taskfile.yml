@@ -1,0 +1,11 @@
+version: '3'
+
+profiles:
+  dev:
+    vars:
+      ENV: dev
+
+tasks:
+  default:
+    cmds:
+      - echo "{{.ENV}}"

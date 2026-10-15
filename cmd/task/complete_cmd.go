@@ -27,6 +27,10 @@ func runComplete(args []string) error {
 		task.WithDisableFuzzy(true),
 		task.WithOffline(true),
 		task.WithDownload(false),
+		// Completion lists declared profiles, so a partially typed
+		// --profile value must not trigger profile validation while loading
+		// the Taskfile.
+		task.WithProfile(""),
 	)
 
 	// Best-effort: a missing or broken Taskfile must not break completion.

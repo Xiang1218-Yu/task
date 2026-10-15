@@ -1,0 +1,9 @@
+version: '3'
+
+includes:
+  sub: ./included.yml
+
+tasks:
+  default:
+    cmds:
+      - echo "root"

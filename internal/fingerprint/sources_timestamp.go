@@ -13,12 +13,14 @@ import (
 type TimestampChecker struct {
 	tempDir string
 	dry     bool
+	profile string
 }
 
-func NewTimestampChecker(tempDir string, dry bool) *TimestampChecker {
+func NewTimestampChecker(tempDir string, dry bool, profile string) *TimestampChecker {
 	return &TimestampChecker{
 		tempDir: tempDir,
 		dry:     dry,
+		profile: profile,
 	}
 }
 
@@ -168,6 +170,10 @@ func (*TimestampChecker) OnError(t *ast.Task) error {
 	return nil
 }
 
+func (checker *TimestampChecker) timestampDir() string {
+	return stateDir(checker.tempDir, "timestamp", checker.profile)
+}
+
 func (checker *TimestampChecker) timestampFilePath(t *ast.Task) string {
-	return filepath.Join(checker.tempDir, "timestamp", normalizeFilename(t.Task))
+	return filepath.Join(checker.timestampDir(), normalizeFilename(t.Task))
 }

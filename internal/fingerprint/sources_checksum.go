@@ -10,7 +10,6 @@ import (
 
 	"github.com/zeebo/xxh3"
 
-	"github.com/go-task/task/v3/internal/filepathext"
 	"github.com/go-task/task/v3/taskfile/ast"
 )
 
@@ -19,12 +18,14 @@ import (
 type ChecksumChecker struct {
 	tempDir string
 	dry     bool
+	profile string
 }
 
-func NewChecksumChecker(tempDir string, dry bool) *ChecksumChecker {
+func NewChecksumChecker(tempDir string, dry bool, profile string) *ChecksumChecker {
 	return &ChecksumChecker{
 		tempDir: tempDir,
 		dry:     dry,
+		profile: profile,
 	}
 }
 
@@ -44,7 +45,7 @@ func (checker *ChecksumChecker) IsUpToDate(t *ast.Task) (bool, error) {
 	}
 
 	if !checker.dry && oldHash != newHash {
-		_ = os.MkdirAll(filepathext.SmartJoin(checker.tempDir, "checksum"), 0o755)
+		_ = os.MkdirAll(checker.checksumDir(), 0o755)
 		if err = os.WriteFile(checksumFile, []byte(newHash+"\n"), 0o644); err != nil {
 			return false, err
 		}
@@ -123,8 +124,12 @@ func (c *ChecksumChecker) checksum(t *ast.Task) (string, error) {
 	return fmt.Sprintf("%x%x", hash.Hi, hash.Lo), nil
 }
 
+func (checker *ChecksumChecker) checksumDir() string {
+	return stateDir(checker.tempDir, "checksum", checker.profile)
+}
+
 func (checker *ChecksumChecker) checksumFilePath(t *ast.Task) string {
-	return filepath.Join(checker.tempDir, "checksum", normalizeFilename(t.Name()))
+	return filepath.Join(checker.checksumDir(), normalizeFilename(t.Name()))
 }
 
 var checksumFilenameRegexp = regexp.MustCompile("[^[:alnum:]]")

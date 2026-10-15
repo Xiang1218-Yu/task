@@ -58,6 +58,7 @@ type (
 		Concurrency         int
 		Interval            time.Duration
 		Failfast            bool
+		Profile             string
 
 		// I/O
 		Stdin  io.Reader
@@ -73,6 +74,11 @@ type (
 		TaskSorter         sort.Sorter
 		UserWorkingDir     string
 		EnableVersionCheck bool
+
+		// activeProfile is the resolved effective profile (including inherited
+		// vars, env and dotenv) selected for this execution. It is nil when no
+		// profile is selected.
+		activeProfile *ast.Profile
 
 		fuzzyModel     *fuzzy.Model
 		fuzzyModelOnce sync.Once
@@ -132,6 +138,7 @@ func (e *Executor) fingerprinter() *fingerprint.Fingerprinter {
 		e.TempDir.Fingerprint,
 		e.Dry,
 		e.Logger,
+		fingerprint.WithProfile(e.Profile),
 	)
 }
 
@@ -662,4 +669,19 @@ type failfastOption struct {
 
 func (o *failfastOption) ApplyToExecutor(e *Executor) {
 	e.Failfast = o.failfast
+}
+
+// WithProfile selects the named execution profile declared in the Taskfile.
+// The profile's vars, env and dotenv files apply to every task compiled for
+// this execution, including dependencies.
+func WithProfile(profile string) *profileOption {
+	return &profileOption{profile}
+}
+
+type profileOption struct {
+	profile string
+}
+
+func (o *profileOption) ApplyToExecutor(e *Executor) {
+	e.Profile = o.profile
 }

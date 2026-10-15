@@ -1,0 +1,42 @@
+version: '3'
+
+dotenv: ['.env.base']
+
+profiles:
+  base:
+    vars:
+      ENV: base
+      SHARED: from-base
+    env:
+      PT_FROM_BASE_ENV: base-env
+  dev:
+    desc: Development profile
+    extends: base
+    dotenv: ['.env.dev']
+    vars:
+      ENV: dev
+    env:
+      PT_LOG_LEVEL: debug
+  test:
+    extends: dev
+    vars:
+      ENV: test
+
+vars:
+  ENV: default
+
+tasks:
+  show:
+    desc: Show the resolved configuration
+    cmds:
+      - echo "ENV={{.ENV}} SHARED={{.SHARED}} PROFILE={{.PROFILE}}"
+      - echo "BASE_DOTENV=$PT_BASE_DOTENV DEV_DOTENV=$PT_DEV_DOTENV LOG_LEVEL=$PT_LOG_LEVEL FROM_BASE_ENV=$PT_FROM_BASE_ENV"
+
+  dep:
+    cmds:
+      - echo "DEP_ENV={{.ENV}}"
+
+  with-dep:
+    deps: [dep]
+    cmds:
+      - echo "TASK_ENV={{.ENV}}"

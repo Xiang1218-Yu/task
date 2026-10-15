@@ -18,6 +18,10 @@ var V3 = semver.MustParse("3")
 // ErrIncludedTaskfilesCantHaveDotenvs is returned when a included Taskfile contains dotenvs
 var ErrIncludedTaskfilesCantHaveDotenvs = errors.New("task: Included Taskfiles can't have dotenv declarations. Please, move the dotenv declaration to the main Taskfile")
 
+// ErrIncludedTaskfilesCantHaveProfiles is returned when an included Taskfile
+// contains profile declarations.
+var ErrIncludedTaskfilesCantHaveProfiles = errors.New("task: Included Taskfiles can't have profile declarations. Please, move the profiles declaration to the main Taskfile")
+
 // Taskfile is the abstract syntax tree for a Taskfile
 type Taskfile struct {
 	Location     string
@@ -30,6 +34,7 @@ type Taskfile struct {
 	Vars         *Vars
 	Env          *Vars
 	Tasks        *Tasks
+	Profiles     *Profiles
 	Silent       bool
 	Dotenv       []string
 	Run          string
@@ -44,6 +49,9 @@ func (t1 *Taskfile) Merge(t2 *Taskfile, include *Include) error {
 	}
 	if len(t2.Dotenv) > 0 {
 		return ErrIncludedTaskfilesCantHaveDotenvs
+	}
+	if t2.Profiles.Len() > 0 {
+		return ErrIncludedTaskfilesCantHaveProfiles
 	}
 	if t2.Output.IsSet() {
 		t1.Output = t2.Output
@@ -94,6 +102,7 @@ func (tf *Taskfile) UnmarshalYAML(node *yaml.Node) error {
 			Vars         *Vars
 			Env          *Vars
 			Tasks        *Tasks
+			Profiles     *Profiles
 			Silent       bool
 			Dotenv       []string
 			Run          string
@@ -112,6 +121,7 @@ func (tf *Taskfile) UnmarshalYAML(node *yaml.Node) error {
 		tf.Vars = taskfile.Vars
 		tf.Env = taskfile.Env
 		tf.Tasks = taskfile.Tasks
+		tf.Profiles = taskfile.Profiles
 		tf.Silent = taskfile.Silent
 		tf.Dotenv = taskfile.Dotenv
 		tf.Run = taskfile.Run
@@ -128,6 +138,9 @@ func (tf *Taskfile) UnmarshalYAML(node *yaml.Node) error {
 		}
 		if tf.Tasks == nil {
 			tf.Tasks = NewTasks()
+		}
+		if tf.Profiles == nil {
+			tf.Profiles = NewProfiles()
 		}
 		return nil
 	}

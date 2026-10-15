@@ -16,6 +16,7 @@ type (
 		defaultMethod  string
 		tempDir        string
 		dry            bool
+		profile        string
 		logger         *logger.Logger
 		statusChecker  StatusCheckable
 		sourcesChecker SourcesCheckable
@@ -31,6 +32,15 @@ func WithStatusChecker(checker StatusCheckable) FingerprinterOption {
 func WithSourcesChecker(checker SourcesCheckable) FingerprinterOption {
 	return func(f *Fingerprinter) {
 		f.sourcesChecker = checker
+	}
+}
+
+// WithProfile names the selected execution profile. Persistent fingerprint
+// state (checksum and timestamp files) is namespaced per profile, so state
+// recorded under one profile can never be reused by another.
+func WithProfile(profile string) FingerprinterOption {
+	return func(f *Fingerprinter) {
+		f.profile = profile
 	}
 }
 
@@ -144,5 +154,5 @@ func (f *Fingerprinter) resolveSourcesChecker(t *ast.Task) (SourcesCheckable, er
 	if f.sourcesChecker != nil {
 		return f.sourcesChecker, nil
 	}
-	return NewSourcesChecker(f.resolveMethod(t), f.tempDir, f.dry)
+	return NewSourcesChecker(f.resolveMethod(t), f.tempDir, f.dry, f.profile)
 }

@@ -1,0 +1,11 @@
+version: '3'
+
+profiles:
+  dev:
+    vars:
+      ENV: dev
+
+tasks:
+  hello:
+    cmds:
+      - echo "hello"

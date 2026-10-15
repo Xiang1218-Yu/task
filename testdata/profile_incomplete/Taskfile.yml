@@ -1,0 +1,10 @@
+version: '3'
+
+profiles:
+  dev:
+    extends: missing-base
+
+tasks:
+  default:
+    cmds:
+      - echo "hi"

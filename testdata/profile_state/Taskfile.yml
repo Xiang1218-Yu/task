@@ -1,0 +1,21 @@
+version: '3'
+
+profiles:
+  dev:
+    vars:
+      ENV: dev
+  test:
+    vars:
+      ENV: test
+
+tasks:
+  build:
+    sources: [source.txt]
+    cmds:
+      - echo "ran-checksum {{.ENV}}"
+
+  build-timestamp:
+    method: timestamp
+    sources: [source.txt]
+    cmds:
+      - echo "ran-timestamp {{.ENV}}"

@@ -22,12 +22,18 @@ func Complete(e *task.Executor, fs *pflag.FlagSet, args []string, opts Options) 
 	}
 
 	if flag := ctx.valueFlag; flag != nil {
+		if flag.Name == "profile" && e != nil && e.Taskfile != nil {
+			return completeProfileNames(e, ""), DirectiveNoFileComp
+		}
 		return completeFlagValue(flag.Name, "")
 	}
 
 	if strings.HasPrefix(ctx.toComplete, "-") {
 		if strings.Contains(ctx.toComplete, "=") {
 			if f, prefix := valueFlag(fs, ctx.toComplete); f != nil {
+				if f.Name == "profile" && e != nil && e.Taskfile != nil {
+					return completeProfileNames(e, prefix), DirectiveNoFileComp
+				}
 				// Shells match against the whole token, so a bare value never would.
 				return completeFlagValue(f.Name, prefix)
 			}
@@ -47,7 +53,14 @@ func Complete(e *task.Executor, fs *pflag.FlagSet, args []string, opts Options) 
 }
 
 func NeedsTaskfile(args []string, fs *pflag.FlagSet) bool {
-	if !parseContext(args, fs).inTaskContext() {
+	ctx := parseContext(args, fs)
+	// Completing the value of --profile requires reading the declared
+	// profiles from the Taskfile.
+	completingProfileValue := ctx.valueFlag != nil && ctx.valueFlag.Name == "profile"
+	if strings.HasPrefix(ctx.toComplete, "--profile=") {
+		completingProfileValue = true
+	}
+	if !ctx.inTaskContext() && !completingProfileValue {
 		return false
 	}
 	// Reading the Taskfile from standard input would hang the shell on a keystroke.
@@ -147,6 +160,16 @@ func suggest(prefix string, values []string) []Suggestion {
 	return slicesext.Convert(values, func(v string) Suggestion {
 		return Suggestion{Value: prefix + v}
 	})
+}
+
+// completeProfileNames lists the profiles declared in the Taskfile for the
+// --profile flag value.
+func completeProfileNames(e *task.Executor, prefix string) []Suggestion {
+	out := make([]Suggestion, 0, e.Taskfile.Profiles.Len())
+	for name, profile := range e.Taskfile.Profiles.All() {
+		out = append(out, Suggestion{Value: prefix + name, Description: profile.Desc})
+	}
+	return out
 }
 
 // CLI variables are global to the invocation, not scoped to a task, so this

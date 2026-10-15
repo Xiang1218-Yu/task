@@ -1,0 +1,12 @@
+version: '3'
+
+profiles:
+  a:
+    extends: b
+  b:
+    extends: a
+
+tasks:
+  default:
+    cmds:
+      - echo "hi"
